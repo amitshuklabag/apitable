@@ -3,13 +3,6 @@ set -o allexport; source .env; set +o allexport;
 
 #wait until the server is ready
 echo "Waiting for software to be ready ..."
-echo "It will take a bit of time ..."
-sleep 90s;
-
-docker-compose down;
-docker-compose up -d;
-
-echo "Waiting for software to be ready ..."
 sleep 180s;
 
 target=$(docker-compose port gateway 80)
