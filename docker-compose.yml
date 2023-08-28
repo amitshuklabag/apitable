@@ -1,0 +1,178 @@
+version: "3.9"
+
+services:
+  web-server:
+    image: ${IMAGE_REGISTRY}/${IMAGE_WEB_SERVER}
+    restart: always
+    expose:
+      - "8080"
+    env_file:
+      - ./.env
+
+  imageproxy-server:
+    image: ${IMAGE_REGISTRY}/${IMAGE_IMAGEPROXY_SERVER}
+    restart: always
+    expose:
+      - "8080"
+    environment:
+      - TZ=${TIMEZONE}
+      - BASEURL=${AWS_ENDPOINT}
+
+  backend-server:
+    image: ${IMAGE_REGISTRY}/${IMAGE_BACKEND_SERVER}
+    restart: always
+    env_file:
+      - ./.env
+    expose:
+      - "8081"
+    environment:
+      - TZ=${TIMEZONE}
+      - DEFAULT_TIME_ZONE=${TIMEZONE}
+    depends_on:
+      - init-db
+
+  room-server:
+    image: ${IMAGE_REGISTRY}/${IMAGE_ROOM_SERVER}
+    restart: always
+    expose:
+      - "3333"
+      - "3334"
+      - "3001"
+      - "3002"
+      - "3006"
+      - "3005"
+      - "3007"
+    env_file:
+      - ./.env
+    environment:
+      - TZ=${TIMEZONE}
+      - NODE_ENV=${ENV}
+      - NODE_OPTIONS=--max-old-space-size=2048 --max-http-header-size=80000
+      - API_MAX_MODIFY_RECORD_COUNTS=${API_MAX_MODIFY_RECORD_COUNTS}
+      - INSTANCE_MAX_MEMORY=4096M
+      - ENABLE_SOCKET=true
+    depends_on:
+      - mysql
+
+  # Third Party Dockers
+  gateway:
+    image: ${IMAGE_REGISTRY}/${IMAGE_GATEWAY}
+    restart: always
+    ports:
+      - 172.17.0.1:7538:80
+      # - ${NGINX_HTTPS_PORT:-443}:443
+    environment:
+      - TZ=${TIMEZONE}
+    depends_on:
+      - web-server
+      - imageproxy-server
+      - backend-server
+      - room-server
+      - init-appdata
+  minio:
+    image: ${IMAGE_MINIO}
+    restart: always
+    command: server --console-address ":9001" /data
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - ${DATA_PATH}/minio/data:/data
+      - ${DATA_PATH}/minio/config:/root/.minio
+    environment:
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
+      - TZ=${TIMEZONE}
+
+  redis:
+    image: ${IMAGE_REDIS}
+    restart: always
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD}",
+      ]
+    expose:
+      - "6379"
+    volumes:
+      - ${DATA_PATH}/redis:/data
+    environment:
+      - TZ=${TIMEZONE}
+
+  mysql:
+    image: ${IMAGE_MYSQL}
+    restart: always
+    volumes:
+      - ${DATA_PATH}/mysql:/var/lib/mysql
+    expose:
+      - "3306"
+    ports:
+      - "172.17.0.1:3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - TZ=${TIMEZONE}
+    command: --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_general_ci
+      --sql_mode=IGNORE_SPACE,NO_ENGINE_SUBSTITUTION
+      --lower_case_table_names=2
+
+  rabbitmq:
+    image: ${IMAGE_RABBITMQ}
+    restart: always
+    volumes:
+      - ${DATA_PATH}/rabbitmq:/var/lib/rabbitmq
+    expose:
+      - "5671"
+      - "5672"
+      - "15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USERNAME}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+
+  init-db:
+    image: ${IMAGE_REGISTRY}/${IMAGE_INIT_DB}
+    environment:
+      - TZ=${TIMEZONE}
+      - DB_HOST=${MYSQL_HOST}
+      - DB_PORT=${MYSQL_PORT}
+      - DB_NAME=${MYSQL_DATABASE}
+      - DB_USERNAME=${MYSQL_USERNAME}
+      - DB_PASSWORD=${MYSQL_PASSWORD}
+      - DATABASE_TABLE_PREFIX=${DATABASE_TABLE_PREFIX}
+      - ACTION=update
+    depends_on:
+      - mysql
+
+  # init-appdata
+  init-appdata:
+    image: ${IMAGE_REGISTRY}/${IMAGE_INIT_APPDATA}
+    env_file:
+      - ./.env
+    depends_on:
+      - mysql
+      - init-db
+
+  pma:
+    image: phpmyadmin
+    restart: always
+    links:
+      - mysql:mysql
+    ports:
+      - "172.17.0.1:24781:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: ${MYSQL_USERNAME}
+      PMA_PASSWORD: ${MYSQL_PASSWORD}
+      UPLOAD_LIMIT: 500M
+      MYSQL_USERNAME: root
+      MYSQL_ROOT_PASSWORD: ${ADMIN_PASSWORD}
+    depends_on:
+      - mysql
